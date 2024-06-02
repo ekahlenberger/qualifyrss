@@ -10,8 +10,8 @@ pub enum AppError{
     Reqwest(#[from] reqwest::Error),
     #[error("Url error: {0}")]
     UrlParseError(#[from] ParseError),
-    #[error("Command line arg error: {0}")]
-    Param(String),
+    // #[error("Command line arg error: {0}")]
+    // Param(String),
     #[error("ScraperError: {0}")]
     ScrapeError(String),
     #[error("RssError: {0}")]
