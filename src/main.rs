@@ -11,13 +11,16 @@ use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use reqwest::Client;
-use rss::Channel;
+use rss::{Channel, Item};
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::str;
 use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
 use url::Url;
+use feed_rs;
+use feed_rs::model::Feed;
+use feed_rs::parser;
 
 mod error;
 use crate::error::AppError;
@@ -94,7 +97,13 @@ async fn handle_request(req: Request<hyper::body::Incoming>, _config: Arc<Config
 
 async fn qualify_rss(url: Url) -> Result<String, AppError> {
     let content = reqwest::get(url).await?.bytes().await?;
-    let channel = Channel::read_from(&content[..])?;
+
+    let feed = match parser::parse(&content[..]) {
+        Ok(feed) => feed,
+        Err(_) => return Err(AppError::ScrapeError("Failed to parse feed".to_string())),
+    };
+
+    let channel = convert_feed_to_channel(feed);
     let channel = Arc::new(Mutex::new(channel));
 
     let mut tasks = vec![];
@@ -142,4 +151,24 @@ async fn fetch_html(url: &str) -> Result<String, AppError> {
     else {
         return Err(AppError::ScrapeError("missing scraped html response".to_string()))
     }
+}
+
+fn convert_feed_to_channel(feed: Feed) -> Channel {
+    let items: Vec<Item> = feed.entries.into_iter().map(|entry| {
+        let mut item = Item::default();
+        item.set_title(entry.title.map(|t| t.content).unwrap_or_else(|| "".to_string()));
+        item.set_link(entry.links.first().map(|l| l.href.clone()).unwrap_or_else(|| "".to_string()));
+        item.set_description(entry.summary.map(|s| s.content).unwrap_or_else(|| "".to_string()));
+        if let Some(content) = entry.content {
+            item.set_content(content.body.unwrap_or_else(|| "".to_string()));
+        }
+        item
+    }).collect();
+
+    let mut channel = Channel::default();
+    channel.set_title(feed.title.map(|t| t.content).unwrap_or_else(|| "".to_string()));
+    channel.set_link(feed.links.first().map(|l| l.href.clone()).unwrap_or_else(|| "".to_string()));
+    channel.set_description(feed.description.map(|d| d.content).unwrap_or_else(|| "".to_string()));
+    channel.set_items(items);
+    channel
 }
