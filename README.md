@@ -68,7 +68,7 @@ echo -n "https://example.com/rss" | base64
 curl http://127.0.0.1:<PORT>/aHR0cHM6Ly9leGFtcGxlLmNvbS9yc3M=
 ```
 
-#License
+# License
 
 This project is licensed under the MIT License.
 
