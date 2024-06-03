@@ -15,8 +15,8 @@ WORKDIR /app
 # Copy the release binary from the build stage
 COPY target/release/qualifyrss .
 
-# Expose any ports the application uses
-EXPOSE 8080
+# Expose the port
+EXPOSE ${PORT}
 
-# Run the binary
-CMD ["./qualifyrss"]
+# Run the binary with the port argument
+CMD ["./qualifyrss", "-p", "80"]
