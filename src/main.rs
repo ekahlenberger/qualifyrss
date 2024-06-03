@@ -21,6 +21,10 @@ use url::Url;
 use feed_rs;
 use feed_rs::model::Feed;
 use feed_rs::parser;
+use tokio::signal;
+use tokio::signal::unix::{signal, SignalKind};
+use tokio::sync::oneshot;
+use tokio::sync::oneshot::Sender;
 
 mod error;
 use crate::error::AppError;
@@ -34,44 +38,87 @@ struct Config {
     port: u16,
 }
 
+async fn wait_for_shutdown_signals(shutdown_tx: Sender<()>) {
+    println!("Waiting for shutdown signals...");
 
+    let ctrl_c = async {
+        signal::ctrl_c().await.expect("Failed to listen for SIGINT");
+        println!("Received SIGINT");
+    };
+
+    let sigterm = async {
+        let mut sigterm = signal(SignalKind::terminate()).expect("Failed to listen for SIGTERM");
+        sigterm.recv().await;
+        println!("Received SIGTERM");
+    };
+
+    // Wait for either SIGINT or SIGTERM
+    tokio::select! {
+        _ = ctrl_c => { println!("Ctrl+C pressed (SIGINT)"); },
+        _ = sigterm => { println!("Terminate signal received (SIGTERM)"); },
+    }
+
+    println!("Sending shutdown signal...");
+    // Send the shutdown signal
+    let _ = shutdown_tx.send(());
+}
 
 #[tokio::main]
 async fn main() -> Result<(), AppError> {
     let config = Arc::new(Config::parse());
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], config.port));
+    let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
+
+    let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
+
+    tokio::task::spawn(wait_for_shutdown_signals(shutdown_tx));
+
+    println!("server is waiting for incoming connections on {}", addr);
     let listener = TcpListener::bind(addr).await?;
 
     loop {
-        let config = config.clone();
-        let (stream, _) = listener.accept().await?;
-        let io = TokioIo::new(stream);
-        tokio::task::spawn(async move {
-            // Finally, we bind the incoming connection to our `hello` service
-            if let Err(err) = http1::Builder::new()
-                // `service_fn` converts our function in a `Service`
-                .serve_connection(io, service_fn(move |req| handle_request(req, config.clone())))
-                .await
-            {
-                eprintln!("Error serving connection: {:?}", err);
+        tokio::select! {
+            _ = &mut shutdown_rx => {
+                println!("Received shutdown signal. Shutting down...");
+                break;
             }
-        });
+            Ok((stream, _)) = listener.accept() => {
+                let config = config.clone();
+                println!("incoming connection accepted");
+                let io = TokioIo::new(stream);
+                tokio::task::spawn(async move {
+                    println!("spawning connection worker");
+                    // Finally, we bind the incoming connection to our `hello` service
+                    if let Err(err) = http1::Builder::new()
+                        // `service_fn` converts our function in a `Service`
+                        .serve_connection(io, service_fn(move |req| handle_request(req, config.clone())))
+                        .await
+                    {
+                        eprintln!("Error serving connection: {:?}", err);
+                    }
+                });
+            }
+        }
     }
+    println!("Server has been gracefully shut down.");
+    Ok(())
 }
 
 async fn handle_request(req: Request<hyper::body::Incoming>, _config: Arc<Config>) -> Result<Response<Full<Bytes>>, Infallible> {
     let path = req.uri().path().trim_start_matches('/');
-
+    println!("handling request for {}", path);
 
     match general_purpose::STANDARD.decode(path) {
         Ok(decoded_bytes) => {
             let raw_url = match str::from_utf8(&decoded_bytes) {
                 Ok(url) => url,
-                Err(_) => return Ok(Response::builder()
-                    .status(StatusCode::BAD_REQUEST)
-                    .body(Full::new(Bytes::from("Invalid UTF-8 sequence in Base64 decoded URL")))
-                    .unwrap())
+                Err(_) => {
+                    println!("Invalid UTF-8 sequence in Base64 decoded URL");
+                    return Ok(Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .body(Full::new(Bytes::from("Invalid UTF-8 sequence in Base64 decoded URL")))
+                        .unwrap())
+                }
             };
             match Url::parse(raw_url) {
                 Ok(url) => match qualify_rss(url).await {
