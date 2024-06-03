@@ -4,6 +4,8 @@
 ![Rust](https://img.shields.io/badge/rust-1.78.0-orange.svg)
 ![RSS](https://img.shields.io/badge/RSS-Supported-brightgreen.svg)
 ![Atom](https://img.shields.io/badge/Atom-Supported-brightgreen.svg)
+![Beta](https://img.shields.io/badge/status-beta-blue.svg)
+![Docker](https://img.shields.io/badge/docker-ready-blue.svg)
 
 ## Overview
 
