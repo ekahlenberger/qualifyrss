@@ -1,4 +1,7 @@
 # qualifyrss
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Dependency Status](https://deps.rs/repo/github/ekahlenberger/qualifyrss/status.svg)](https://deps.rs/repo/github/ekahlenberger/qualifyrss)
+![Rust](https://img.shields.io/badge/rust-1.78.0-orange.svg)
 
 ## Overview
 
