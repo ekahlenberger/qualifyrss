@@ -193,10 +193,10 @@ async fn fetch_html(url: &str) -> Result<String, AppError> {
     let scraper = ArticleScraper::new(None).await;
     let article = scraper.parse(&parsedUrl,false,&client,None).await.map_err(|e| AppError::ScrapeError(e.to_string()))?;
     if let Some(html) = article.html {
-        return Ok(html);
+        Ok(html)
     }
     else {
-        return Err(AppError::ScrapeError("missing scraped html response".to_string()))
+        Err(AppError::ScrapeError("missing scraped html response".to_string()))
     }
 }
 
