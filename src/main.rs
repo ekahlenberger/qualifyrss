@@ -152,14 +152,10 @@ async fn qualify_rss(url: Url) -> Result<String, AppError> {
 
     let mut channel = convert_feed_to_channel(feed);
 
-    let mut tasks = vec![];
-
-    for item in channel.items() {
-        if let Some(link) = item.link() {
-            let link = link.to_string();
-            tasks.push(tokio::spawn(fetch_html(link)));
-        }
-    }
+    let tasks: Vec<_> = channel.items.iter().
+        filter(|item|item.link().is_some()).
+        map(|item| tokio::spawn(fetch_html(item.link().unwrap().to_string()))).
+        collect();
 
     for task in tasks {
         match task.await {
