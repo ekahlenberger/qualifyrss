@@ -15,13 +15,13 @@ use rss::{Channel, Item};
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::str;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
 use tokio::net::TcpListener;
 use url::Url;
 use feed_rs;
 use feed_rs::model::Feed;
 use feed_rs::parser;
-use tokio::signal;
+use tokio::{signal};
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::Sender;
@@ -150,50 +150,40 @@ async fn qualify_rss(url: Url) -> Result<String, AppError> {
         Err(_) => return Err(AppError::ScrapeError("Failed to parse feed".to_string())),
     };
 
-    let channel = convert_feed_to_channel(feed);
-    let channel = Arc::new(Mutex::new(channel));
+    let mut channel = convert_feed_to_channel(feed);
 
     let mut tasks = vec![];
 
-    for item in channel.lock().unwrap().items_mut() {
+    for item in channel.items() {
         if let Some(link) = item.link() {
             let link = link.to_string();
-            let channel = Arc::clone(&channel);
-            let task = tokio::spawn(async move {
-                match fetch_html(&link).await {
-                    Ok(html) => {
-                        let mut channel = channel.lock().unwrap();
-                        if let Some(item) = channel.items_mut().iter_mut().find(|i| i.link() == Some(&link)) {
-                            item.set_content(html);
-                        }
-                    },
-                    Err(e) => {
-                        eprintln!("Failed to fetch HTML: {}", e);
-                    }
-                }
-            });
-            tasks.push(task);
+            tasks.push(tokio::spawn(fetch_html(link)));
         }
     }
 
     for task in tasks {
-        if let Err(e) = task.await {
-            eprintln!("Task failed: {}", e);
+        match task.await {
+            Ok(htmlResult) =>
+                match htmlResult {
+                    Ok((html, link)) =>
+                        if let Some(item) = channel.items_mut().iter_mut().find(|i| i.link() == Some(&link)) {
+                            item.set_content(html);
+                        }
+                    Err(err) => eprintln!("Fetch html failed: {}", err)
+                }
+            Err(joinErr) => eprintln!("Task failed: {}", joinErr)
         }
     }
-
-    let channel = Arc::try_unwrap(channel).expect("Failed to unwrap Arc").into_inner().expect("Failed to get Mutex guard");
-
     Ok(channel.to_string())
 }
 
-async fn fetch_html(url: &str) -> Result<String, AppError> {
-    let parsedUrl = Url::parse(url).map_err(|e| AppError::UrlParseError(e))?;
+async fn fetch_html(url: String) -> Result<(String, String), AppError> {
+    let parsedUrl = Url::parse(&url).map_err(|e| AppError::UrlParseError(e))?;
     let client = Client::new();
     let scraper = ArticleScraper::new(None).await;
     let article = scraper.parse(&parsedUrl,false,&client,None).await.map_err(|e| AppError::ScrapeError(e.to_string()))?;
     if let Some(html) = article.html {
-        Ok(html)
+        Ok((html, url))
     }
     else {
         Err(AppError::ScrapeError("missing scraped html response".to_string()))

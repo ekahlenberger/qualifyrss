@@ -1,5 +1,6 @@
 use std::io;
 use thiserror::Error;
+use tokio::task::JoinError;
 use url::ParseError;
 
 #[derive(Error, Debug)]
@@ -10,10 +11,10 @@ pub enum AppError{
     Reqwest(#[from] reqwest::Error),
     #[error("Url error: {0}")]
     UrlParseError(#[from] ParseError),
-    // #[error("Command line arg error: {0}")]
-    // Param(String),
     #[error("ScraperError: {0}")]
     ScrapeError(String),
     #[error("RssError: {0}")]
-    RssError(#[from] rss::Error)
+    RssError(#[from] rss::Error),
+    #[error("JoinError: {0}")]
+    JoinError(#[from] JoinError)
 }
