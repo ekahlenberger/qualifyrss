@@ -192,6 +192,13 @@ fn convert_feed_to_channel(feed: Feed) -> Channel {
         item.set_title(entry.title.map(|t| t.content).unwrap_or_else(|| "".to_string()));
         item.set_link(entry.links.first().map(|l| l.href.clone()).unwrap_or_else(|| "".to_string()));
         item.set_description(entry.summary.map(|s| s.content).unwrap_or_else(|| "".to_string()));
+        item.set_author(entry.authors.first().map(|person| person.email.to_owned()).unwrap_or_else(|| None));
+        if let Some(publishing_date) = entry.published {
+            item.set_pub_date(Some(publishing_date.to_rfc3339()));
+        }
+        if let Some(updated) = entry.updated {
+            item.set_pub_date(Some(updated.to_rfc3339()));
+        }
         if let Some(content) = entry.content {
             item.set_content(content.body.unwrap_or_else(|| "".to_string()));
         }
