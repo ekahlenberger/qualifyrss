@@ -7,10 +7,12 @@ use std::convert::Infallible;
 use base64::engine::general_purpose;
 use std::str;
 use base64::Engine;
+use tokio::sync::mpsc::UnboundedSender;
 use crate::{Config};
+use crate::cache::cache_message::{CacheMessage};
 use crate::feed_handling::qualify_rss;
 
-pub async fn handle_request(req: Request<hyper::body::Incoming>, _config: Arc<Config>) -> Result<Response<Full<Bytes>>, Infallible> {
+pub async fn handle_request(req: Request<hyper::body::Incoming>, _config: Arc<Config>, cache_sender: UnboundedSender<CacheMessage>) -> Result<Response<Full<Bytes>>, Infallible> {
     let path = req.uri().path().trim_start_matches('/');
     println!("handling request for {}", path);
 
@@ -27,13 +29,14 @@ pub async fn handle_request(req: Request<hyper::body::Incoming>, _config: Arc<Co
                 }
             };
             match Url::parse(raw_url) {
-                Ok(url) => match qualify_rss(url).await {
-                    Ok(qualified_rss) => Ok(Response::new(Full::new(Bytes::from(qualified_rss)))),
-                    Err(error) => Ok(Response::builder()
-                        .status(StatusCode::INTERNAL_SERVER_ERROR)
-                        .body(Full::new(Bytes::from(format!("Could not qualify RSS: {}", error.to_string()))))
-                        .unwrap())
-                },
+                Ok(url) =>
+                    match qualify_rss(url, cache_sender).await {
+                        Ok(qualified_rss) => Ok(Response::new(Full::new(Bytes::from(qualified_rss)))),
+                        Err(error) => Ok(Response::builder()
+                            .status(StatusCode::INTERNAL_SERVER_ERROR)
+                            .body(Full::new(Bytes::from(format!("Could not qualify RSS: {}", error.to_string()))))
+                            .unwrap())
+                    },
                 Err(_) => Ok(Response::builder()
                     .status(StatusCode::BAD_REQUEST)
                     .body(Full::new(Bytes::from("Invalid URL in Base64 decoded path")))

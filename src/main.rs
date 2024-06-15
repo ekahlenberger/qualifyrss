@@ -8,17 +8,20 @@ use std::net::SocketAddr;
 use std::str;
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use tokio::signal;
-use tokio::signal::unix::{signal, SignalKind};
-use tokio::sync::oneshot;
-use tokio::sync::oneshot::Sender;
+use tokio::sync::{mpsc, oneshot};
 
 mod error;
 mod request_handling;
 mod feed_handling;
+mod cache;
+mod fluent;
+mod shutdown_handling;
 
+use crate::cache::cache_manager_task;
+use crate::cache::cache_message::CacheMessage;
 use crate::error::AppError;
 use crate::request_handling::handle_request;
+use crate::shutdown_handling::wait_for_shutdown_signals;
 
 /// Simple HTTP server serving files with configurable port.
 #[derive(Parser)]
@@ -29,60 +32,38 @@ struct Config {
     port: u16,
 }
 
-async fn wait_for_shutdown_signals(shutdown_tx: Sender<()>) {
-    println!("Waiting for shutdown signals...");
-
-    let ctrl_c = async {
-        signal::ctrl_c().await.expect("Failed to listen for SIGINT");
-        println!("Received SIGINT");
-    };
-
-    let sigterm = async {
-        let mut sigterm = signal(SignalKind::terminate()).expect("Failed to listen for SIGTERM");
-        sigterm.recv().await;
-        println!("Received SIGTERM");
-    };
-
-    // Wait for either SIGINT or SIGTERM
-    tokio::select! {
-        _ = ctrl_c => { println!("Ctrl+C pressed (SIGINT)"); },
-        _ = sigterm => { println!("Terminate signal received (SIGTERM)"); },
-    }
-
-    println!("Sending shutdown signal...");
-    // Send the shutdown signal
-    let _ = shutdown_tx.send(());
-}
-
 #[tokio::main]
 async fn main() -> Result<(), AppError> {
     let config = Arc::new(Config::parse());
 
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
 
-    let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
+    let (shutdown_sender, mut shutdown_receiver) = oneshot::channel::<()>();
+    tokio::spawn(wait_for_shutdown_signals(shutdown_sender));
 
-    tokio::task::spawn(wait_for_shutdown_signals(shutdown_tx));
+    let (cache_sender, cache_receiver) = mpsc::unbounded_channel::<CacheMessage>();
+    tokio::spawn(cache_manager_task(cache_sender.clone(), cache_receiver));
 
     println!("server is waiting for incoming connections on {}", addr);
     let listener = TcpListener::bind(addr).await?;
 
     loop {
         tokio::select! {
-            _ = &mut shutdown_rx => {
+            _ = &mut shutdown_receiver => {
                 println!("Received shutdown signal. Shutting down...");
                 break;
             }
             Ok((stream, _)) = listener.accept() => {
                 let config = config.clone();
+                let cache_sender = cache_sender.clone();
                 println!("incoming connection accepted");
                 let io = TokioIo::new(stream);
-                tokio::task::spawn(async move {
+                tokio::spawn(async move {
                     println!("spawning connection worker");
                     // Finally, we bind the incoming connection to our `hello` service
                     if let Err(err) = http1::Builder::new()
                         // `service_fn` converts our function in a `Service`
-                        .serve_connection(io, service_fn(move |req| handle_request(req, config.clone())))
+                        .serve_connection(io, service_fn(move |req| handle_request(req, config.clone(), cache_sender.clone())))
                         .await
                     {
                         eprintln!("Error serving connection: {:?}", err);
