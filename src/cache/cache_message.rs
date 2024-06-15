@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use tokio::sync::oneshot;
 
 pub enum CacheMessage {
@@ -8,7 +7,7 @@ pub enum CacheMessage {
 
 pub struct CacheGetMessage{
     pub url: String,
-    pub response_channel: oneshot::Sender<Option<Arc<Box<String>>>>,
+    pub response_channel: oneshot::Sender<Option<Box<String>>>,
 }
 
 pub struct CacheSetMessage{

@@ -30,7 +30,7 @@ pub async fn cache_manager_task(
                             None => None,
                             Some(data) => {
                                 data.last_access = SystemTime::now();
-                                Some(data.content.clone())
+                                Some(data.get_content())
                             }
                         });
                 }
@@ -42,7 +42,7 @@ pub async fn cache_manager_task(
                             .entry(url)
                             .or_insert(CacheData::new(content.clone()));
                         data.last_update = SystemTime::now();
-                        data.content = content;
+                        data.set_content(content);
                         if current_update_url.is_some() && current_update_url.clone().unwrap().eq(&set_msg.url) {
                             current_update_url = None;
                         }

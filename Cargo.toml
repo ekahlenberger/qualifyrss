@@ -1,6 +1,6 @@
 [package]
 name = "qualifyrss"
-version = "0.5.2"
+version = "0.5.3"
 edition = "2021"
 
 [dependencies]
@@ -18,4 +18,5 @@ url = "2.5.0"
 rss = "2.0.8"
 feed-rs = "2.0.0"
 article_scraper = "2.1.0"
+flate2 = "1.0.30"
 

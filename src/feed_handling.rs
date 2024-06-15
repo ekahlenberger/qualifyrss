@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use url::Url;
 use reqwest::Client;
 use article_scraper::ArticleScraper;
@@ -63,11 +62,11 @@ pub async fn fetch_html(url: String) -> Result<FetchResponse, AppError> {
     }
 }
 async fn fetch_html_or_use_cache(url: String, cache_sender: UnboundedSender<CacheMessage>) -> Result<FetchResponse, AppError> {
-    let (response_sender, response_receiver) = oneshot::channel::<Option<Arc<Box<String>>>>();
+    let (response_sender, response_receiver) = oneshot::channel::<Option<Box<String>>>();
     if let Ok(_) = cache_sender.send(CacheMessage::Get(CacheGetMessage{url: url.clone(), response_channel: response_sender})){
         if let Ok(response) = response_receiver.await {
             if let Some(html) = response {
-                return Ok(FetchResponse { url, content: (**html).clone(), from_cache: true });
+                return Ok(FetchResponse { url, content: (*html).clone(), from_cache: true });
             }
         }
     }
