@@ -1,33 +1,24 @@
 #![allow(non_snake_case)]
 
-use article_scraper::ArticleScraper;
-use base64::{Engine};
-use base64::engine::general_purpose;
 use clap::Parser;
-use http_body_util::Full;
-use hyper::body::Bytes;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
-use reqwest::Client;
-use rss::{Channel, Item};
-use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::str;
-use std::sync::{Arc};
+use std::sync::Arc;
 use tokio::net::TcpListener;
-use url::Url;
-use feed_rs;
-use feed_rs::model::Feed;
-use feed_rs::parser;
-use tokio::{signal};
+use tokio::signal;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::Sender;
 
 mod error;
+mod request_handling;
+mod feed_handling;
+
 use crate::error::AppError;
+use crate::request_handling::handle_request;
 
 /// Simple HTTP server serving files with configurable port.
 #[derive(Parser)]
@@ -102,113 +93,4 @@ async fn main() -> Result<(), AppError> {
     }
     println!("Server has been gracefully shut down.");
     Ok(())
-}
-
-async fn handle_request(req: Request<hyper::body::Incoming>, _config: Arc<Config>) -> Result<Response<Full<Bytes>>, Infallible> {
-    let path = req.uri().path().trim_start_matches('/');
-    println!("handling request for {}", path);
-
-    match general_purpose::STANDARD.decode(path) {
-        Ok(decoded_bytes) => {
-            let raw_url = match str::from_utf8(&decoded_bytes) {
-                Ok(url) => url,
-                Err(_) => {
-                    println!("Invalid UTF-8 sequence in Base64 decoded URL");
-                    return Ok(Response::builder()
-                        .status(StatusCode::BAD_REQUEST)
-                        .body(Full::new(Bytes::from("Invalid UTF-8 sequence in Base64 decoded URL")))
-                        .unwrap())
-                }
-            };
-            match Url::parse(raw_url) {
-                Ok(url) => match qualify_rss(url).await {
-                    Ok(qualified_rss) => Ok(Response::new(Full::new(Bytes::from(qualified_rss)))),
-                    Err(error) => Ok(Response::builder()
-                        .status(StatusCode::INTERNAL_SERVER_ERROR)
-                        .body(Full::new(Bytes::from(format!("Could not qualify RSS: {}", error.to_string()))))
-                        .unwrap())
-                },
-                Err(_) => Ok(Response::builder()
-                    .status(StatusCode::BAD_REQUEST)
-                    .body(Full::new(Bytes::from("Invalid URL in Base64 decoded path")))
-                    .unwrap())
-            }
-        },
-        Err(_) => Ok(Response::builder()
-            .status(StatusCode::BAD_REQUEST)
-            .body(Full::new(Bytes::from("Failed to decode Base64 path")))
-            .unwrap())
-    }
-}
-
-
-async fn qualify_rss(url: Url) -> Result<String, AppError> {
-    let content = reqwest::get(url).await?.bytes().await?;
-
-    let feed = match parser::parse(&content[..]) {
-        Ok(feed) => feed,
-        Err(_) => return Err(AppError::ScrapeError("Failed to parse feed".to_string())),
-    };
-
-    let mut channel = convert_feed_to_channel(feed);
-
-    let tasks: Vec<_> = channel.items.iter().
-        filter(|item|item.link().is_some()).
-        map(|item| tokio::spawn(fetch_html(item.link().unwrap().to_string()))).
-        collect();
-
-    for task in tasks {
-        match task.await {
-            Ok(htmlResult) =>
-                match htmlResult {
-                    Ok((html, link)) =>
-                        if let Some(item) = channel.items_mut().iter_mut().find(|i| i.link() == Some(&link)) {
-                            item.set_content(html);
-                        }
-                    Err(err) => eprintln!("Fetch html failed: {}", err)
-                }
-            Err(joinErr) => eprintln!("Task failed: {}", joinErr)
-        }
-    }
-    Ok(channel.to_string())
-}
-
-async fn fetch_html(url: String) -> Result<(String, String), AppError> {
-    let parsedUrl = Url::parse(&url).map_err(|e| AppError::UrlParseError(e))?;
-    let client = Client::new();
-    let scraper = ArticleScraper::new(None).await;
-    let article = scraper.parse(&parsedUrl,false,&client,None).await.map_err(|e| AppError::ScrapeError(e.to_string()))?;
-    if let Some(html) = article.html {
-        Ok((html, url))
-    }
-    else {
-        Err(AppError::ScrapeError("missing scraped html response".to_string()))
-    }
-}
-
-fn convert_feed_to_channel(feed: Feed) -> Channel {
-    let items: Vec<Item> = feed.entries.into_iter().map(|entry| {
-        let mut item = Item::default();
-        item.set_title(entry.title.map(|t| t.content).unwrap_or_else(|| "".to_string()));
-        item.set_link(entry.links.first().map(|l| l.href.clone()).unwrap_or_else(|| "".to_string()));
-        item.set_description(entry.summary.map(|s| s.content).unwrap_or_else(|| "".to_string()));
-        item.set_author(entry.authors.first().map(|person| person.email.to_owned()).unwrap_or_else(|| None));
-        if let Some(publishing_date) = entry.published {
-            item.set_pub_date(Some(publishing_date.to_rfc3339()));
-        }
-        if let Some(updated) = entry.updated {
-            item.set_pub_date(Some(updated.to_rfc3339()));
-        }
-        if let Some(content) = entry.content {
-            item.set_content(content.body.unwrap_or_else(|| "".to_string()));
-        }
-        item
-    }).collect();
-
-    let mut channel = Channel::default();
-    channel.set_title(feed.title.map(|t| t.content).unwrap_or_else(|| "".to_string()));
-    channel.set_link(feed.links.first().map(|l| l.href.clone()).unwrap_or_else(|| "".to_string()));
-    channel.set_description(feed.description.map(|d| d.content).unwrap_or_else(|| "".to_string()));
-    channel.set_items(items);
-    channel
 }
