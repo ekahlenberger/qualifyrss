@@ -19,52 +19,93 @@ pub async fn cache_manager_task(
     mut receiver: UnboundedReceiver<CacheMessage>,
 ) {
     let mut cache: HashMap<String, CacheData> = HashMap::new();
-
+    let mut current_update_url: Option<String> = None;
     loop {
         match receiver.try_recv() {
             Ok(message) => match message {
                 CacheMessage::Get(get_msg) => {
                     let _ = get_msg
                         .response_channel
-                        .send(match cache.get(&get_msg.url) {
+                        .send(match cache.get_mut(&get_msg.url) {
                             None => None,
-                            Some(value) => Some(value.content.clone()),
+                            Some(data) => {
+                                data.last_access = SystemTime::now();
+                                Some(data.content.clone())
+                            }
                         });
                 }
                 CacheMessage::Set(set_msg) => {
-                    let content = Arc::new(set_msg.content);
-                    let data = cache
-                        .entry(set_msg.url)
-                        .or_insert(CacheData::new(content.clone()));
-                    data.last_update = SystemTime::now();
-                    data.content = content;
+                    let url = set_msg.url.clone();
+                    if set_msg.content.is_some() {
+                        let content = Arc::new(set_msg.content.unwrap());
+                        let data = cache
+                            .entry(url)
+                            .or_insert(CacheData::new(content.clone()));
+                        data.last_update = SystemTime::now();
+                        data.content = content;
+                        if current_update_url.is_some() && current_update_url.clone().unwrap().eq(&set_msg.url) {
+                            current_update_url = None;
+                        }
+                        println!("cached: {}", &set_msg.url);
+                    }
+                    else if current_update_url.is_some() && current_update_url.clone().unwrap().eq(&set_msg.url) {
+                        current_update_url = None;
+                        eprintln!("cache update failed for: {}", &set_msg.url);
+                    }
                 }
             },
             Err(e) => match e {
                 TryRecvError::Empty => {
-                    let update_limit = SystemTime::now().sub(2.hours());
-                    let updateable = cache.iter().find_map(|(key, value)| {
-                        if value.last_update < update_limit {
-                            Some(key.to_owned())
-                        } else {
-                            None
-                        }
-                    });
-                    if let Some(url) = updateable {
-                        let sender = sender.clone();
-                        tokio::spawn(async move {
-                            if let Ok(fetch_response) = fetch_html(url).await {
-                                let _ = sender.send(CacheMessage::Set(CacheSetMessage {
-                                    content: Box::new(fetch_response.content),
-                                    url: fetch_response.url,
-                                }));
-                            };
-                        });
-                    };
+                    delete_not_accessed(&mut cache);
+                    if current_update_url.is_none() {
+                        current_update_url = schedule_next_update(sender.clone(), &mut cache);
+                    }
                     sleep(100.milli_seconds()).await
                 }
                 TryRecvError::Disconnected => break,
             },
         }
     }
+}
+
+fn delete_not_accessed(cache: &mut HashMap<String, CacheData>) {
+    let delete_limit = SystemTime::now().sub(6.hours());
+    let deletables: Vec<_> = cache.iter().filter_map(|(url, data)| if data.last_access < delete_limit {Some(url.clone())} else {None}).collect();
+    for del in deletables {
+        cache.remove(&del);
+        println!("removed from cache: {}", &del);
+    }
+}
+
+fn schedule_next_update(sender: UnboundedSender<CacheMessage>, cache: &mut HashMap<String, CacheData>) -> Option<String> {
+    let update_limit = SystemTime::now().sub(211.minutes());
+    let updateable = cache.iter().find_map(|(key, value)| {
+        if value.last_update < update_limit {
+            Some(key.to_owned())
+        } else {
+            None
+        }
+    });
+    if let Some(url) = updateable {
+        let sender = sender.clone();
+        println!("scheduled cache update for: {}", &url);
+        let response_url = url.clone();
+        tokio::spawn(async move{
+            let failure_url = url.clone();
+            if let Ok(fetch_response) = fetch_html(url).await {
+                let _ = sender.send(CacheMessage::Set(CacheSetMessage {
+                    content: Some(Box::new(fetch_response.content)),
+                    url: fetch_response.url,
+                }));
+            }
+            else {
+                let _ = sender.send(CacheMessage::Set(CacheSetMessage {
+                    content: None,
+                    url: failure_url,
+                }));
+            }
+        });
+        return Some(response_url);
+    };
+    None
 }

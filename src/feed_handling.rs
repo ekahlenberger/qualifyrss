@@ -32,7 +32,9 @@ pub async fn qualify_rss(url: Url, cache_sender: UnboundedSender<CacheMessage>) 
                     Ok(response) =>
                         if let Some(item) = channel.items_mut().iter_mut().find(|i| i.link() == Some(&response.url)) {
                             item.set_content(response.content.clone());
-                            let _ = cache_sender.send(CacheMessage::Set(CacheSetMessage {url: response.url, content: Box::new(response.content)}));
+                            if !response.from_cache {
+                                let _ = cache_sender.send(CacheMessage::Set(CacheSetMessage { url: response.url, content: Some(Box::new(response.content))}));
+                            }
                         }
                     Err(err) => eprintln!("Fetch html failed: {}", err)
                 }
@@ -45,6 +47,7 @@ pub async fn qualify_rss(url: Url, cache_sender: UnboundedSender<CacheMessage>) 
 pub struct FetchResponse {
     pub url: String,
     pub content: String,
+    pub from_cache: bool,
 }
 
 pub async fn fetch_html(url: String) -> Result<FetchResponse, AppError> {
@@ -53,7 +56,7 @@ pub async fn fetch_html(url: String) -> Result<FetchResponse, AppError> {
     let scraper = ArticleScraper::new(None).await;
     let article = scraper.parse(&parsedUrl,false,&client,None).await.map_err(|e| AppError::ScrapeError(e.to_string()))?;
     if let Some(content) = article.html {
-        Ok( FetchResponse {url, content })
+        Ok( FetchResponse {url, content, from_cache: false })
     }
     else {
         Err(AppError::ScrapeError("missing scraped html response".to_string()))
@@ -64,7 +67,7 @@ async fn fetch_html_or_use_cache(url: String, cache_sender: UnboundedSender<Cach
     if let Ok(_) = cache_sender.send(CacheMessage::Get(CacheGetMessage{url: url.clone(), response_channel: response_sender})){
         if let Ok(response) = response_receiver.await {
             if let Some(html) = response {
-                return Ok(FetchResponse { url, content: (**html).clone() });
+                return Ok(FetchResponse { url, content: (**html).clone(), from_cache: true });
             }
         }
     }

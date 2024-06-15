@@ -13,5 +13,5 @@ pub struct CacheGetMessage{
 
 pub struct CacheSetMessage{
     pub url: String,
-    pub content: Box<String>,
+    pub content: Option<Box<String>>,
 }
